@@ -18,7 +18,8 @@ from transformers import (
     DataCollatorWithPadding,
     AlbertConfig
 )
-from sklearn.metrics import f1_score, accuracy_score, mean_squared_error, mean_absolute_error, r2_score
+from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score, mean_squared_error, mean_absolute_error, r2_score
+
 
 class ALBERTSentimentBaseProcessor:
     """
@@ -272,7 +273,7 @@ class ALBERTSentimentFineTuner(ALBERTSentimentBaseProcessor):
             self.loss_function = loss_function
             self.fisher_calculator = fisher_calculator
 
-        def compute_loss(self, model, inputs, return_outputs=False):
+        def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
             loss, outputs = self.loss_function(model, inputs, return_outputs=True)
 
             # Accumulate Fisher Information only during training
@@ -368,7 +369,7 @@ class ALBERTSentimentFineTuner(ALBERTSentimentBaseProcessor):
         return loss_function, hyperparams, evaluation_metric
 
     def fine_tune(self, dataset=None, start_from_sentiment_context=None, save_fine_tune='yes',
-                  fine_tune_version_name='', fine_tune_quality=True, cov_matrix=False, epsilon='auto'):
+                fine_tune_version_name='', fine_tune_quality=True, cov_matrix=False, epsilon='auto'):
         """
         Fine-tunes the ALBERT model on the provided dataset. Optionally starts from a specific fine-tuned version.
         """
@@ -376,7 +377,7 @@ class ALBERTSentimentFineTuner(ALBERTSentimentBaseProcessor):
             raise ValueError("A properly structured dataset with 'train' and 'test' splits must be provided for fine-tuning.")
 
         # Get loss function, hyperparameters, and evaluation metric
-        loss_function, hyperparams, evaluation_metric = self.get_loss_and_hyperparams()
+        loss_function, hyperparams, _ = self.get_loss_and_hyperparams()
         self.loss_function = loss_function
 
         # Adjust batch_size for ALBERT-xlarge if necessary
@@ -391,17 +392,17 @@ class ALBERTSentimentFineTuner(ALBERTSentimentBaseProcessor):
         estimated_ram_usage = self.estimate_ram_usage(hyperparams['batch_size'], hyperparams['epochs'])
         print(f"Estimated RAM usage for training: {estimated_ram_usage:.2f} GB")
 
+        # Initialize the model
+        self.initialize_model()
+
         # Set up the training arguments using hyperparameters
-        training_args = TrainingArguments(
-            output_dir='./results',
+        training_args = self.get_training_args(
             learning_rate=hyperparams['learning_rate'],
-            per_device_train_batch_size=hyperparams['batch_size'],
-            num_train_epochs=hyperparams['epochs'],
+            batch_size=hyperparams['batch_size'],
+            epochs=hyperparams['epochs'],
             weight_decay=hyperparams.get('weight_decay', 0.0),
             evaluation_strategy="epoch",
-            logging_strategy="epoch",
-            save_strategy="epoch",
-            disable_tqdm=False  # Ensure progress bar is displayed
+            logging_strategy="epoch"
         )
 
         # Dynamic padding with DataCollator
@@ -414,21 +415,55 @@ class ALBERTSentimentFineTuner(ALBERTSentimentBaseProcessor):
         else:
             fisher_calculator = None
 
-        # Use the CustomTrainer
-        trainer = self.CustomTrainer(
-            model=self.model,
-            args=training_args,
+        # Prepare compute_metrics function
+        if self.num_labels == 1:
+            # Regression task
+            def compute_metrics(pred):
+                labels = pred.label_ids
+                preds = pred.predictions.squeeze(-1)
+                mse = mean_squared_error(labels, preds)
+                mae = mean_absolute_error(labels, preds)
+                r2 = r2_score(labels, preds)
+                return {
+                    'mse': mse,
+                    'mae': mae,
+                    'r2': r2
+                }
+        else:
+            # Classification task
+            def compute_metrics(pred):
+                labels = pred.label_ids
+                preds = np.argmax(pred.predictions, axis=-1)
+                precision = precision_score(labels, preds, average='weighted', zero_division=0)
+                recall = recall_score(labels, preds, average='weighted', zero_division=0)
+                f1 = f1_score(labels, preds, average='weighted', zero_division=0)
+                acc = accuracy_score(labels, preds)
+                return {
+                    'accuracy': acc,
+                    'precision': precision,
+                    'recall': recall,
+                    'f1': f1,
+                }
+
+        # Get the trainer
+        trainer = self.get_trainer(
+            training_args=training_args,
             train_dataset=dataset['train'],
             eval_dataset=dataset['test'],
             data_collator=data_collator,
             loss_function=self.loss_function,
-            fisher_calculator=fisher_calculator  # Pass the fisher calculator to the trainer
+            fisher_calculator=fisher_calculator,
+            compute_metrics=compute_metrics
         )
 
         # Start training with progress bar
         print("Starting fine-tuning...")
         trainer.train()
         print("Completed fine-tuning on the dataset.")
+
+        # Evaluate the model
+        metrics = trainer.evaluate()
+        print(f"Evaluation metrics: {metrics}")
 
         if cov_matrix and fisher_calculator is not None:
             # Save the covariance matrix after training
@@ -455,8 +490,7 @@ class ALBERTSentimentFineTuner(ALBERTSentimentBaseProcessor):
                 model_type=model_type,
                 fine_tune_version_name=fine_tune_version_name,
                 fine_tune_quality=fine_tune_quality,
-                eval_dataset=dataset['test'],
-                evaluation_metric=evaluation_metric
+                eval_metrics=metrics  # Pass the evaluation metrics
             )
 
     def estimate_ram_usage(self, batch_size, epochs):
@@ -483,7 +517,7 @@ class ALBERTSentimentFineTuner(ALBERTSentimentBaseProcessor):
         return total_ram_usage_gb
 
     def save_model_with_metadata(self, model, sample_size, hyperparameters, dataset_name, model_type,
-                                 fine_tune_version_name='', fine_tune_quality=True, eval_dataset=None, evaluation_metric=None):
+                                fine_tune_version_name='', fine_tune_quality=True, eval_metrics=None):
         """
         Saves the fine-tuned model along with associated metadata, including continuous_label or class_labels.
         """
@@ -499,19 +533,13 @@ class ALBERTSentimentFineTuner(ALBERTSentimentBaseProcessor):
 
         model.save_pretrained(save_directory)
 
-        # Compute quality metrics if requested
-        if fine_tune_quality and eval_dataset is not None and evaluation_metric is not None:
-            metrics = evaluation_metric(model, eval_dataset)
-        else:
-            metrics = {}
-
         # Create the metadata dictionary
         metadata = {
             'version_name': version_name,
             'sample_size': sample_size,
             'dataset': dataset_name,
             'model_type': model_type,
-            'weights_filepath': os.path.join(save_directory, 'model.safetensors'),
+            'weights_filepath': os.path.join(save_directory, 'pytorch_model.bin'),
             'output_mode': self.num_labels  # Use self.num_labels
         }
 
@@ -525,7 +553,10 @@ class ALBERTSentimentFineTuner(ALBERTSentimentBaseProcessor):
 
         # Update metadata with hyperparameters and metrics
         metadata.update(hyperparameters)
-        metadata.update(metrics)
+        if eval_metrics:
+            # Only include relevant evaluation metrics
+            eval_metrics_filtered = {k: v for k, v in eval_metrics.items() if k.startswith('eval_')}
+            metadata.update(eval_metrics_filtered)
 
         # Load existing metadata
         metadata_file_path = 'metadata.json'
@@ -543,6 +574,52 @@ class ALBERTSentimentFineTuner(ALBERTSentimentBaseProcessor):
             json.dump(existing_metadata, f, indent=4)
 
         print(f"Model and metadata for version '{version_name}' saved successfully.")
+
+    def get_training_args(self, learning_rate, batch_size, epochs, weight_decay, evaluation_strategy='epoch', logging_strategy='epoch'):
+        """
+        Returns the TrainingArguments object configured with the provided hyperparameters.
+        """
+        training_args = TrainingArguments(
+            output_dir='./results',
+            learning_rate=learning_rate,
+            per_device_train_batch_size=batch_size,
+            per_device_eval_batch_size=batch_size,
+            num_train_epochs=epochs,
+            weight_decay=weight_decay,
+            evaluation_strategy=evaluation_strategy,
+            logging_strategy=logging_strategy,
+            save_strategy="no",  # Not saving checkpoints
+            disable_tqdm=False  # Ensure progress bar is displayed
+        )
+        return training_args
+
+    def get_trainer(self, training_args, train_dataset, eval_dataset, data_collator=None, loss_function=None, fisher_calculator=None, compute_metrics=None):
+        """
+        Returns a Trainer object configured with the provided datasets and arguments.
+        """
+        # Use the CustomTrainer if loss_function is provided
+        if loss_function is not None:
+            trainer = self.CustomTrainer(
+                model=self.model,
+                args=training_args,
+                train_dataset=train_dataset,
+                eval_dataset=eval_dataset,
+                data_collator=data_collator,
+                loss_function=loss_function,
+                fisher_calculator=fisher_calculator,
+                compute_metrics=compute_metrics
+            )
+        else:
+            # Use standard Trainer
+            trainer = Trainer(
+                model=self.model,
+                args=training_args,
+                train_dataset=train_dataset,
+                eval_dataset=eval_dataset,
+                data_collator=data_collator,
+                compute_metrics=compute_metrics
+            )
+        return trainer
 
 class ALBERTSentimentInferencer(ALBERTSentimentBaseProcessor):
     def run_inference(self, texts, sentiment_context=None, dataset_name=None, sentiment_mode='classic'):
