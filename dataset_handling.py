@@ -2,7 +2,6 @@ import os
 import random
 import pandas as pd
 import json
-import random
 from datasets import load_dataset, Dataset
 
 class DatasetHandler:
@@ -168,3 +167,19 @@ class DatasetHandler:
         for column_name, results in results_dict.items():
             df[column_name] = results
         self.write_csv(df)
+
+    def get_timestamps(self):
+        """
+        Returns the timestamps from the CSV file for analysis.
+        """
+        df = self.read_csv()
+        if 'Time' in df.columns:
+            timestamps = df['Time'].tolist()
+            # Filter out empty strings or NaN values
+            timestamps = [ts for ts in timestamps if pd.notnull(ts) and ts != '']
+            if timestamps:
+                return timestamps
+            else:
+                return None
+        else:
+            return None
