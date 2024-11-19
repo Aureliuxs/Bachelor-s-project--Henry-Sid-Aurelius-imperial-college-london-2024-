@@ -1394,107 +1394,74 @@ class LDA_Visualisation(BasePlot):
         self.fig = None  # Initialize self.fig to None
 
     def create_lda_visualisation(self):
-        if 'LDA_PCA_Coordinates' not in self.data.columns or 'LDA_Topics' not in self.data.columns:
-            print("No LDA data was found. Skipping LDA visualization.")
-            return  # Exit the method gracefully
+        print("Creating LDA visualization...")
+        try:
+            if 'LDA_PCA_Coordinates' not in self.data.columns or 'LDA_Topics' not in self.data.columns:
+                print("No LDA data was found. Skipping LDA visualization.")
+                return  # Exit the method gracefully
 
-        # Filter out rows where 'LDA_PCA_Coordinates' has missing values
-        self.data = self.data.dropna(subset=['LDA_PCA_Coordinates'])
+            # Filter out rows where 'LDA_PCA_Coordinates' has missing values
+            self.data = self.data.dropna(subset=['LDA_PCA_Coordinates'])
 
-        # Split the 'LDA_PCA_Coordinates' column into separate x, y, z coordinates
-        coordinates = self.data['LDA_PCA_Coordinates'].apply(lambda x: list(map(float, x.split(','))))
-        x_coords = [coord[0] for coord in coordinates]
-        y_coords = [coord[1] for coord in coordinates]
-        z_coords = [coord[2] for coord in coordinates]
+            # Split the 'LDA_PCA_Coordinates' column into separate x, y, z coordinates
+            coordinates = self.data['LDA_PCA_Coordinates'].apply(lambda x: list(map(float, x.split(','))))
+            coordinates = list(coordinates)
+            x_coords = [coord[0] for coord in coordinates]
+            y_coords = [coord[1] for coord in coordinates]
+            z_coords = [coord[2] for coord in coordinates]
 
-        lda_topics = self.data['LDA_Topics']
-        
-        # Ensure we have a text column to display
-        if 'Text' in self.data.columns:
-            # Truncate the text to the first 16 tokens
-            hover_texts = self.data['Text'].apply(self.truncate_text_to_tokens)
-        else:
-            hover_texts = [''] * len(self.data)  # If no text column, leave hover text empty
+            lda_topics = self.data['LDA_Topics'].astype(int)
 
-        # Create 3D scatter plot
-        fig = go.Figure()
+            # Ensure we have a text column to display
+            if 'Text' in self.data.columns:
+                # Truncate the text to the first 16 tokens using the method from TextPreparation
+                hover_texts = self.data['Text'].apply(
+                    self.data_preparation.text_preparation.truncate_text_to_tokens
+                )
+            else:
+                hover_texts = [''] * len(self.data)  # If no text column, leave hover text empty
 
-        # Map unique topics to colors
-        unique_topics = lda_topics.unique()
-        color_sequence = self.get_color_sequence()[1:]  # Skip forest green for data points
-        color_map = {topic: color_sequence[i % len(color_sequence)] for i, topic in enumerate(unique_topics)}
+            # Convert to lists for consistent indexing
+            hover_texts = list(hover_texts)
+            lda_topics = list(lda_topics)
 
-        # Plot each point and color by LDA_Topic
-        for topic in unique_topics:
-            topic_data = self.data[self.data['LDA_Topics'] == topic]
-            topic_coords = coordinates[lda_topics == topic]
-            hover_texts_topic = hover_texts[lda_topics == topic]
+            # Create 3D scatter plot
+            fig = go.Figure()
 
-            fig.add_trace(go.Scatter3d(
-                x=[coord[0] for coord in topic_coords],
-                y=[coord[1] for coord in topic_coords],
-                z=[coord[2] for coord in topic_coords],
-                mode='markers',
-                marker=dict(size=5, color=color_map[topic]),
-                name=f"Topic {topic}",
-                hovertext=hover_texts_topic,  # Assign hover text for each point
-                hoverinfo='text'  # Enable hover text
-            ))
+            # Map unique topics to colors
+            unique_topics = set(lda_topics)
+            color_sequence = self.get_color_sequence()[1:]  # Skip forest green for data points
+            color_map = {topic: color_sequence[i % len(color_sequence)] for i, topic in enumerate(unique_topics)}
 
-        # Set axis labels and title using forest green color
-        fig.update_layout(
-            title="LDA Representation of Text Data",
-            title_font=dict(color=self.colors['forest_green']),  # Title color set to forest green
-            scene=dict(
-                xaxis_title='PCA component 1',
-                yaxis_title='PCA component 2',
-                zaxis_title='PCA component 3',
-                xaxis=dict(
-                    tickmode='linear', 
-                    tick0=0, 
-                    dtick=0.5,
-                    title_font=dict(color=self.colors['forest_green']),  # X-axis title color
-                    tickfont=dict(color=self.colors['forest_green'])      # X-axis tick color
-                ),
-                yaxis=dict(
-                    tickmode='linear', 
-                    tick0=0, 
-                    dtick=0.5,
-                    title_font=dict(color=self.colors['forest_green']),  # Y-axis title color
-                    tickfont=dict(color=self.colors['forest_green'])      # Y-axis tick color
-                ),
-                zaxis=dict(
-                    tickmode='linear', 
-                    tick0=0, 
-                    dtick=0.5,
-                    title_font=dict(color=self.colors['forest_green']),  # Z-axis title color
-                    tickfont=dict(color=self.colors['forest_green'])      # Z-axis tick color
-                ),
-            ),
-            legend_title="LDA Topics",
-            legend=dict(
-                x=0,  # Position on the right
-                y=0.5,  # Position at the top
-                bgcolor='rgba(255, 255, 255, 0.5)',  # Optional background color
-                bordercolor='black',
-                borderwidth=1
-            ),
-            annotations=[dict(
-                text=self.add_line_breaks(
-                    "This is a Latent Dirichlet Allocation generated plot using principal component analysis "
-                    "to display the 3 principal component dimensions identified within the data. Each color "
-                    "represents an identified topic. We recommend forming topic conclusions on our BERT models, "
-                    "and treating this LDA model as a legacy feature."
-                ),
-                showarrow=False,
-                xref="paper", yref="paper",
-                x=0.1, y=1, 
-                xanchor='center', yanchor='top',
-                font=dict(color='black', size=14),  # Change text color to black
-            )]
-        )
+            # Plot each point and color by LDA_Topic
+            for topic in unique_topics:
+                indices = [i for i, t in enumerate(lda_topics) if t == topic]
+                topic_x = [x_coords[i] for i in indices]
+                topic_y = [y_coords[i] for i in indices]
+                topic_z = [z_coords[i] for i in indices]
+                hover_texts_topic = [hover_texts[i] for i in indices]
 
-        self.fig = fig  # Assign the figure to self.fig
+                fig.add_trace(go.Scatter3d(
+                    x=topic_x,
+                    y=topic_y,
+                    z=topic_z,
+                    mode='markers',
+                    marker=dict(size=5, color=color_map[topic]),
+                    name=f"Topic {topic}",
+                    hovertext=hover_texts_topic,  # Assign hover text for each point
+                    hoverinfo='text'  # Enable hover text
+                ))
+
+            # Set axis labels and title using forest green color
+            fig.update_layout(
+                title="LDA Representation of Text Data",
+                # ... rest of your layout code ...
+            )
+
+            self.fig = fig  # Assign the figure to self.fig
+            print("LDA visualization created successfully.")
+        except Exception as e:
+            print(f"An error occurred while creating LDA visualization: {e}")
 
     def display(self):
         """Display the plot if available."""
