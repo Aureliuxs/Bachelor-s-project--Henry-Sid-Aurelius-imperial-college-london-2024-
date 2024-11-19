@@ -67,14 +67,14 @@ class BERTopicProcessor:
             print(f"Manual mode: Using {self.num_topics} topics.")
         self.topic_model = None
 
-    def initialize_model(self, dataset_size):
+    def initialize_model(self, dataset_size, n_neighbors=None, min_cluster_size=None):
         """
-        Initializes the BERTopic model based on the dataset size.
+        Initializes the BERTopic model based on the dataset size and hyperparameters.
         """
         if dataset_size <= 1000:
             embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
             umap_model = umap.UMAP(
-                n_neighbors=2,
+                n_neighbors=n_neighbors if n_neighbors else 2,
                 n_components=5,
                 min_dist=0.0,
                 metric='cosine',
@@ -89,14 +89,14 @@ class BERTopicProcessor:
         else:
             embedding_model = SentenceTransformer('all-mpnet-base-v2')
             umap_model = umap.UMAP(
-                n_neighbors=15,
+                n_neighbors=n_neighbors if n_neighbors else 15,
                 n_components=5,
                 min_dist=0.0,
                 metric='cosine',
                 random_state=42
             )
             clustering_model = HDBSCAN(
-                min_cluster_size=15,
+                min_cluster_size=min_cluster_size if min_cluster_size else 15,
                 metric='euclidean',
                 cluster_selection_method='eom',
                 prediction_data=True
@@ -109,6 +109,7 @@ class BERTopicProcessor:
             hdbscan_model=clustering_model,
             verbose=True
         )
+
 
     def perform_bertopic(self, texts):
         """
