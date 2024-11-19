@@ -42,8 +42,11 @@ class LDATextProcessor:
         return processed_texts
 
 class LDAProcessor:
-    def __init__(self, num_topics=5):
+    def __init__(self, num_topics=5,alpha='symmetric', eta='symmetric'):
         self.num_topics = num_topics
+        self.alpha = alpha
+        self.eta = eta
+
 
     def perform_lda(self, texts):
         dictionary = corpora.Dictionary(texts)
@@ -53,7 +56,7 @@ class LDAProcessor:
         corpus = [dictionary.doc2bow(text) for text in tqdm(texts, desc="Creating Corpus", unit="document")]
         
         # Train the LDA model on the created corpus
-        lda_model = models.LdaModel(corpus, num_topics=self.num_topics, random_state=42)
+        lda_model = models.LdaModel(corpus, num_topics=self.num_topics, random_state=42,alpha=self.alpha, eta=self.eta)
         
         dominant_topics = [max(lda_model[doc], key=lambda x: x[1])[0] for doc in corpus]
         
