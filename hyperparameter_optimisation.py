@@ -29,7 +29,7 @@ logging.basicConfig(level=logging.INFO)
 
 ### Albert Sentiment Analysis
 
-def optimize_albert_hyperparameters(dataset_name='stocksentiment', n_trials=3, n_jobs=1):
+def optimize_albert_hyperparameters(dataset_name='stocksentiment', n_trials=10, n_jobs=1):
     """
     Optimize hyperparameters for ALBERT model fine-tuning using Optuna.
 
